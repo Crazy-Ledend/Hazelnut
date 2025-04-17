@@ -23,6 +23,27 @@ from levels import LevelSystem
 #import info_commands
 #from playlist_commands import playlist_commands
 from pong import pong
+from dotenv import load_dotenv
+import uvicorn
+from fastapi import FastAPI, Request
+
+import json
+import discord
+import uvicorn
+from fastapi import FastAPI, Request, Header
+from discord.ext import commands
+
+app = FastAPI()
+
+WEBHOOK_AUTH = "###G@m3rz"  # Set this in DiscordBotList
+LOG_CHANNEL_ID = 1351249529306873929  # Replace with a channel ID to log votes
+
+# TOKEN
+# Load the .env file
+load_dotenv()
+# Get the token from environment variables
+TOKEN = os.getenv("TOKEN")
+
 # CUSTOM STATUS
 # Cycle of statuses
 bot_status = cycle(["I need you..", "Fairytale..", "Donut by Twice..", "Meaw <3", "APT.", "Love maze..", "Die With A Smile.."])
@@ -32,6 +53,23 @@ BANK_INTEREST_RATE = 0.05  # 5% interest
 INTEREST_INTERVAL = 604800  # One week in seconds
 DATA_FILE = "economy_data.json"
 STOCKS_FILE = "stocks_data.json"
+PETS_FILE = "pets.json"
+POKEMON_TYPES_FILE = "pokemon_types.json"
+
+def load_json(filename):
+    """Load JSON safely."""
+    if not os.path.exists(filename):
+        return {}
+    with open(filename, "r", encoding="utf-8") as f:
+        try:
+            return json.load(f)
+        except json.JSONDecodeError:
+            return {}
+
+def save_json(filename, data):
+    """Save JSON safely."""
+    with open(filename, "w", encoding="utf-8") as f:
+        json.dump(data, f, indent=4)
 
 # Load or initialize data
 if os.path.exists(DATA_FILE):
@@ -122,7 +160,7 @@ async def level(ctx):
 
     embed = discord.Embed(
         title=f"{ctx.author.name}'s Level Card",
-        description=f"**Level**: {current_level} <:Level:1332822395983233085>\n**XP**: {current_xp}/{next_level_xp} <:XP:1332819774786502717>",
+        description=f"**Level**: {current_level} <:level:1350903399733919815>\n**XP**: {current_xp}/{next_level_xp} <:XP:1350904276343586897>",
         color=discord.Color.blue()
     )
     embed.set_thumbnail(url=avatar_url)
@@ -190,11 +228,11 @@ async def profile(ctx):
         color=discord.Color.blue(),
     )
     embed.set_thumbnail(url=user.avatar.url)  # Set user's profile picture
-    embed.add_field(name="<:Level:1348676724946243625> | Level", value=f"**Level**: {current_level} <:Level:1332822395983233085>\n**Experience**: `{current_xp}/{next_level_xp}`\n{progress_bar}")
-    embed.add_field(name="<:CreditCard:1321830790966939730> | Cache balance", value=f"{wallet} <:credits:1313261430266658867>", inline=False)
-    embed.add_field(name="<:Locker:1321834186927247423> | Vault", value=f"{bank_balance} <:credits:1313261430266658867>", inline=False)
-    embed.add_field(name="<a:Graphic:1328775374242447462> | Portfolio list", value=f"\n- {stocks_display}", inline=False)
-    embed.add_field(name="<:inventory:1328776471992340542> | Inventory Net Worth", value=f"{total_value} <:credits:1313261430266658867>", inline=False)
+    embed.add_field(name="<:Rank:1350903724809388073> | Level", value=f"**Level**: {current_level} <:level:1350903399733919815>\n**Experience**: `{current_xp}/{next_level_xp}`\n{progress_bar}")
+    embed.add_field(name="<:creditcard:1350902997454032909> | Cache balance", value=f"{wallet} <:credits:1313261430266658867>", inline=False)
+    embed.add_field(name="<:Vault:1350903009709654046> | Vault", value=f"{bank_balance} <:credits:1313261430266658867>", inline=False)
+    embed.add_field(name="<a:Graphical:1350903990400847882> | Portfolio list", value=f"\n- {stocks_display}", inline=False)
+    embed.add_field(name="<:bag:1350902222661357670> | Inventory Net Worth", value=f"{total_value} <:credits:1313261430266658867>", inline=False)
 
     if badges_display:  # This check is now safe
         embed.add_field(name="Badges", value=f"\n{badges_display}", inline=False)
@@ -286,6 +324,53 @@ async def update_stock_prices():
 
     save_stocks()
 
+@tasks.loop(minutes=60)
+async def decrease_hunger_happiness():
+    pets = load_json(PETS_FILE)
+    pokemon_types = load_json(POKEMON_TYPES_FILE)
+    current_time = time.time()
+
+    for user_id, user_pets in pets.items():
+        for pet_name, pet_data in user_pets.items():
+            pokemon_id = str(pet_data["pokemon_id"])
+            pokemon_type = pokemon_types.get(pokemon_id, "normal")
+            hunger_rates = {"grass": 4, "fire": 6, "normal": 5}
+            hunger_drop_rate = hunger_rates.get(pokemon_type, 5)
+            happiness_drop_rate = 3
+
+            pet_data["hunger"] = max(0, pet_data["hunger"] - hunger_drop_rate)
+            pet_data["happiness"] = max(0, pet_data["happiness"] - happiness_drop_rate)
+
+            # Initialize timestamps if missing
+            if "last_warning_time" not in pet_data:
+                pet_data["last_warning_time"] = current_time
+            if "last_care_time" not in pet_data:
+                pet_data["last_care_time"] = current_time
+
+            # Check if user should be warned
+            if pet_data["hunger"] <= 0 and pet_data["happiness"] <= 0:
+                time_since_warning = current_time - pet_data["last_warning_time"]
+                if time_since_warning >= 6 * 3600:  # 6 hours
+                    user = await bot.fetch_user(user_id)
+                    await user.send(f"Your `{pet_name.lower().capitalize()}` is suffering from neglect! 🥺 Please care for it soon.")
+                    pet_data["last_warning_time"] = current_time
+
+                # Level penalty after 36 hours of neglect
+                time_since_care = current_time - pet_data["last_care_time"]
+                if time_since_care >= 36 * 3600:
+                    if pet_data.get("level", 1) > 1:
+                        pet_data["level"] -= 1
+                        await user.send(f"⚠️ `{pet_name.lower().capitalize()}` has lost a level due to neglect...")
+                        # Reset last care time so it doesn't keep dropping
+                        pet_data["last_care_time"] = current_time
+
+    save_json(PETS_FILE, pets)
+    print("✅ Updated pet hunger and happiness.")
+
+@decrease_hunger_happiness.before_loop
+async def before_loop():
+    await bot.wait_until_ready()  # Ensures bot is fully ready before starting
+
 # Background task to update interest weekly
 @tasks.loop(hours=168)  # Every week
 async def update_all_interests():
@@ -315,6 +400,62 @@ async def on_ready():
     print("------")
     change_bot_status.start()  # Starts the status update loop
     update_stock_prices.start()  # Start price updater
+    decrease_hunger_happiness.start() # Start pets undater
+
+@app.post("/dbl-vote")
+async def dbl_webhook(request: Request, authorization: str = Header(None)):
+    if authorization != WEBHOOK_AUTH:
+        return {"error": "Unauthorized"}, 403
+
+    data = await request.json()
+    user_id = str(data.get("id"))
+
+    if user_id:
+        user_data = get_user_data(user_id)
+        user_data["wallet"] += 250
+        save_data()
+
+        # Use bot.loop.create_task instead
+        bot.loop.create_task(send_vote_dm(user_id))
+        bot.loop.create_task(log_vote(user_id))
+
+        return {"success": True}
+    
+    return {"error": "Invalid request"}, 400
+
+
+async def send_vote_dm(user_id):
+    await bot.wait_until_ready()
+    try:
+        user = await bot.fetch_user(int(user_id))
+        await user.send(f"🎉 Thank you for voting! You received 250 coins 🍪, <@{user_id}>.")
+    except discord.Forbidden:
+        print(f"❌ Cannot DM user {user_id} — they likely have DMs off.")
+    except Exception as e:
+        print(f"❌ Failed to send DM: {e}")
+
+
+async def log_vote(user_id):
+    await bot.wait_until_ready()
+    try:
+        channel = bot.get_channel(LOG_CHANNEL_ID)
+        if channel:
+            await channel.send(f"📬 Vote received from <@{user_id}>. 250 coins awarded!")
+    except Exception as e:
+        print(f"❌ Failed to log vote in channel: {e}")
+
+
+@app.get("/")
+def home():
+    return {"message": "Hello, FastAPI is working!"}
+
+# Start FastAPI in a separate thread
+import threading
+
+def run_fastapi():
+    uvicorn.run(app, host="0.0.0.0", port=21471)
+
+threading.Thread(target=run_fastapi, daemon=True).start()
 
 # Ensure that load_extension is awaited properly
 async def setup_extensions():
@@ -329,7 +470,9 @@ async def setup_extensions():
     await bot.load_extension("trivial")
     await bot.load_extension("blackjack")
     await bot.load_extension("space")
-    await bot.load_extension("pets_commands")
+    await bot.load_extension("pets")
+    await bot.load_extension("easter")
+    await bot.load_extension("hunt")
     # valentines event (next 3 lines)
     #if "valentines_event" in bot.extensions:
         #return  # Prevent reloading if it's already loaded
@@ -349,4 +492,4 @@ help_commands(bot)
 pong(bot)
 
 # Running the bot
-bot.run("MTI5NTA0Nzg4NTQ5NDI5MjUwMg.G3lewy.0YInvb_CL8m7kRSuT82L247f-j71dp3AIsz8HI")
+bot.run(TOKEN)
